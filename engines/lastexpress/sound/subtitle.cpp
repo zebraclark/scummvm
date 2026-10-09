@@ -1,9 +1,5 @@
 /* ScummVM - Graphic Adventure Engine
  *
- * ScummVM is the legal property of its developers, whose names
- * are too numerous to list here. Please refer to the COPYRIGHT
- * file distributed with this source distribution.
- *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation, either version 3 of the License, or
@@ -28,6 +24,13 @@
 
 #include "common/memstream.h"
 #include "subtitle.h"
+
+// === M2 patch v2: Chinese TTF subtitle rendering ===
+#include "common/file.h"
+#include "common/ustr.h"
+#include "graphics/font.h"
+#include "graphics/fonts/ttf.h"
+// === end M2 patch v2 ===
 
 namespace LastExpress {
 
@@ -183,6 +186,7 @@ SubtitleManager::SubtitleManager(LastExpressEngine *engine) {
 
 SubtitleManager::~SubtitleManager() {
 	SAFE_DELETE(_font);
+	SAFE_DELETE(_ttfFont);
 }
 
 void SubtitleManager::initSubtitles() {
@@ -232,6 +236,10 @@ void SubtitleManager::initSubtitles() {
 	}
 
 	_engine->getGraphicsManager()->modifyPalette(_font->palette, 16);
+
+	// === M2 patch v2: try loading Chinese TTF (fallback to FONT.DAT if absent/failed) ===
+	loadTtfFont();
+	// === end M2 patch v2 ===
 }
 
 void SubtitleManager::storeVArea(PixMap *pixels) {
@@ -268,6 +276,66 @@ void SubtitleManager::restoreVArea(PixMap *pixels) {
 
 void SubtitleManager::vSubOn() {
 	storeVArea(_engine->getGraphicsManager()->_subtitlesBackBuffer);
+
+	// === M2 patch v2: TTF whole-line rendering ===
+	if (_ttfFont) {
+		if (!_engine->getGraphicsManager()->acquireSurface())
+			return;
+
+		// Build upper/lower U32String from char arrays (UTF-16 code units stored as int16).
+		// Bounds check against 60-char array limit; long translations are truncated.
+		Common::U32String upper;
+		const int upperLimit = MIN(_upperLineLength, (int)(sizeof(_upperLineChars) / sizeof(_upperLineChars[0])));
+		for (int i = 0; i < upperLimit; i++) {
+			upper += (uint32)(uint16)_upperLineChars[i];
+		}
+		Common::U32String lower;
+		const int lowerLimit = MIN(_lowerLineLength, (int)(sizeof(_lowerLineChars) / sizeof(_lowerLineChars[0])));
+		for (int i = 0; i < lowerLimit; i++) {
+			lower += (uint32)(uint16)_lowerLineChars[i];
+		}
+
+		// Color: use FONT.DAT palette[1] (original subtitle foreground color) when available,
+		// else default to white. _font->palette is RGB565 packed.
+		uint32 textColor = 0xFFFF;
+		if (_font && _font->palette && _font->palette[1] != 0) {
+			textColor = _font->palette[1];
+		}
+
+		Graphics::Surface &surf = _engine->getGraphicsManager()->_screenSurface;
+		int fontHeight = _ttfFont->getFontHeight();
+
+		// Layout: subtitle area is y=420..458 (38px), original two-line layout uses
+		// 18px per line at y=420 (upper) and y=440 (lower). Center each line vertically
+		// in its 18px band, clamping to keep within the cleared area.
+		const int kUpperBandTop = 420;
+		const int kLowerBandTop = 440;
+		const int kBandHeight = 18;
+		int upperY = kUpperBandTop + (kBandHeight - fontHeight) / 2;
+		if (upperY < kUpperBandTop) upperY = kUpperBandTop;
+		if (upperY + fontHeight > kLowerBandTop) upperY = kLowerBandTop - fontHeight;
+		if (upperY < kUpperBandTop) upperY = kUpperBandTop;
+		int upperWidth = _ttfFont->getStringWidth(upper);
+		if (upperWidth > 0) {
+			int upperX = (640 - upperWidth) / 2;
+			if (upperX < 80) upperX = 80;
+			_ttfFont->drawString(&surf, upper, upperX, upperY, upperWidth, textColor, Graphics::kTextAlignLeft);
+		}
+
+		int lowerY = kLowerBandTop + (kBandHeight - fontHeight) / 2;
+		if (lowerY + fontHeight > 458) lowerY = 458 - fontHeight;
+		if (lowerY < kLowerBandTop) lowerY = kLowerBandTop;
+		int lowerWidth = _ttfFont->getStringWidth(lower);
+		if (lowerWidth > 0) {
+			int lowerX = (640 - lowerWidth) / 2;
+			if (lowerX < 80) lowerX = 80;
+			_ttfFont->drawString(&surf, lower, lowerX, lowerY, lowerWidth, textColor, Graphics::kTextAlignLeft);
+		}
+
+		_engine->getGraphicsManager()->unlockSurface();
+		return;
+	}
+	// === end M2 patch v2 ===
 
 	if (_font->fontData[0]) {
 		if (_engine->getGraphicsManager()->acquireSurface()) {
@@ -400,5 +468,45 @@ void SubtitleManager::subThread() {
 			selectedSubtitle->update();
 	}
 }
+
+// === M2 patch v2: TTF font loading ===
+void SubtitleManager::loadTtfFont() {
+	// Release previous font (initSubtitles is called multiple times via setGammaLevel etc.)
+	if (_ttfFont) {
+		delete _ttfFont;
+		_ttfFont = nullptr;
+	}
+
+#ifdef USE_FREETYPE2
+	Common::File fontFile;
+	// Try SearchMan first so the font can live alongside game files (extra path).
+	// Fall back to default search path if not found there.
+	Common::ArchiveMemberPtr member = SearchMan.lookupMember(Common::Path("cnfont.ttf", Common::Path::kNoExtension));
+	bool opened = false;
+	if (member) {
+		opened = fontFile.open(member);
+	} else {
+		opened = fontFile.open(Common::Path("cnfont.ttf"));
+	}
+	if (opened) {
+		// Size 18: matches FONT.DAT glyph height (18 px) for visual parity with English.
+		// kTTFSizeModeCharacter: size is per-character pixel height.
+		// kTTFRenderModeLight: anti-aliased, lighter weight, better for small Chinese glyphs.
+		_ttfFont = Graphics::loadTTFFont(&fontFile, DisposeAfterUse::NO, 18,
+		                                  Graphics::kTTFSizeModeCharacter,
+		                                  0, 0, Graphics::kTTFRenderModeLight);
+		if (_ttfFont) {
+			debug(1, "LastExpress CN: TTF font loaded (cnfont.ttf, size 18)");
+		} else {
+			debug(1, "LastExpress CN: loadTTFFont returned null for cnfont.ttf (in-game subtitles will not appear)");
+		}
+	} else {
+		debug(1, "LastExpress CN: cnfont.ttf not found in search path; falling back to FONT.DAT");
+	}
+#else
+	debug(1, "LastExpress CN: USE_FREETYPE2 disabled; TTF subtitles unavailable");
+#endif
+}
+// === end M2 patch v2 ===
 
 } // End of namespace LastExpress
