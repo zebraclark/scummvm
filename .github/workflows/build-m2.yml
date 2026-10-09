@@ -1,131 +1,69 @@
-# GitHub Actions workflow for M2 CN build
-# 在 fork 的 scummvm/scummvm 仓库根目录创建 .github/workflows/build-m2.yml
-# 触发：手动 (workflow_dispatch) 或 push
-# 输出：scummvm-win32-x86_64-m2cn.zip (artifact)
-
-name: Build M2 (CN subtitle patch)
+name: Build M2 CN
 
 on:
-  workflow_dispatch:    # 手动触发
+  workflow_dispatch:
   push:
-    branches: [ m2-cn-patch ]
-    paths:
-      - 'engines/lastexpress/sound/subtitle.**'
+    branches: [m2-cn-patch]
 
 permissions:
   contents: read
 
 jobs:
-  build-windows:
+  build:
     runs-on: windows-latest
-    timeout-minutes: 90
-
-    env:
-      SCUMMVM_REPO: https://github.com/scummvm/scummvm.git
-      SCUMMVM_BRANCH: master
-      M2_PATCH_DIR: ${{ github.workspace }}/m2-cn-patch
-
+    timeout-minutes: 60
     steps:
-      - name: Checkout M2 patch files
+      - name: Checkout ScummVM master
         uses: actions/checkout@v4
         with:
-          repository: ${{ github.repository }}
-          path: m2-cn-patch
+          repository: scummvm/scummvm
+          ref: master
+          path: scummvm-src
 
-      - name: Clone ScummVM
+      - name: Apply M2 patch
         shell: bash
         run: |
-          git clone --depth 1 --branch "$SCUMMVM_BRANCH" "$SCUMMVM_REPO" scummvm-src
           cd scummvm-src
-          git log -1 --oneline
+          curl -fsSL https://raw.githubusercontent.com/zebraclark/scummvm/m2-cn-patch/.github/workflows/build-m2.yml -o /tmp/check.yml || true
+          mkdir -p engines/lastexpress/sound
+          curl -fsSL https://raw.githubusercontent.com/zebraclark/scummvm/m2-cn-patch/engines/lastexpress/sound/subtitle.h -o engines/lastexpress/sound/subtitle.h
+          curl -fsSL https://raw.githubusercontent.com/zebraclark/scummvm/m2-cn-patch/engines/lastexpress/sound/subtitle.cpp -o engines/lastexpress/sound/subtitle.cpp
+          echo "=== files applied ==="
+          ls -la engines/lastexpress/sound/subtitle.*
 
-      - name: Apply M2 CN patch
-        shell: bash
-        run: |
-          cp "$M2_PATCH_DIR/patched/subtitle_cn.h"   scummvm-src/engines/lastexpress/sound/subtitle.h
-          cp "$M2_PATCH_DIR/patched/subtitle_cn.cpp" scummvm-src/engines/lastexpress/sound/subtitle.cpp
-          echo "=== diff stats ==="
-          cd scummvm-src
-          git diff --stat engines/lastexpress/sound/
-
-      - name: Setup MSYS2 + MinGW
+      - name: Setup MSYS2
         uses: msys2/setup-msys2@v2
         with:
           msystem: MINGW64
-          update: true
           install: >-
             git
             mingw-w64-x86_64-gcc
             mingw-w64-x86_64-SDL2
             mingw-w64-x86_64-freetype
-            mingw-w64-x86_64-pkg-config
-            mingw-w64-x86_64-nasm
             make
 
-      - name: Configure (USE_FREETYPE2 ON)
-        shell: bash
+      - name: Configure
+        shell: msys2 {0}
         run: |
           cd scummvm-src
-          ./configure \
-            --host=x86_64-w64-mingw32 \
-            --enable-release \
-            --enable-freetype2 \
-            --disable-bink \
-            --disable-openssl \
-            --disable-libcurl \
-            --disable-theora \
-            --disable-vorbis \
-            --disable-flac \
-            --disable-mpeg2 \
-            --disable-sndio \
-            --disable-jpeg \
-            --disable-png \
-            --disable-tiff \
-            --disable-zlib \
-            --disable-pdcurses \
-            --disable-readline \
-            --disable-text-console \
-            --disable-taskbar \
-            --disable-tts \
-            --disable-updates \
-            --disable-sdlnet \
-            --disable-sdltest \
-            --disable-16bit
-          cat config.h | grep -E "USE_FREETYPE2|ENABLE_LAS"
+          ./configure --host=x86_64-w64-mingw32 --enable-freetype2 --disable-bink --disable-openssl --disable-libcurl --disable-theora --disable-vorbis --disable-flac
 
-      - name: Build (this takes 20-40 minutes)
-        shell: bash
+      - name: Build
+        shell: msys2 {0}
         run: |
           cd scummvm-src
-          make -j$(nproc) 2>&1 | tail -50
-          ls -la scummvm.exe
+          make -j2
 
-      - name: Package artifact
-        shell: bash
+      - name: Package
+        shell: msys2 {0}
         run: |
           cd scummvm-src
-          mkdir -p dist
-          cp scummvm.exe dist/
-          cp -r dist ../scummvm-m2cn-win64/
+          cp scummvm.exe ../scummvm.exe
           cd ..
-          7z a scummvm-m2cn-win64.zip scummvm-m2cn-win64/
+          7z a scummvm-m2cn.zip scummvm.exe
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: scummvm-m2cn-win64
-          path: scummvm-m2cn-win64.zip
-          retention-days: 14
-
-      - name: Sanity check
-        if: always()
-        shell: bash
-        run: |
-          echo "=== Build status ==="
-          if [ -f "scummvm-src/scummvm.exe" ]; then
-            echo "OK: scummvm.exe built"
-            ls -la scummvm-src/scummvm.exe
-          else
-            echo "FAIL: scummvm.exe missing"
-            exit 1
-          fi
+          name: scummvm-m2cn
+          path: scummvm-m2cn.zip
