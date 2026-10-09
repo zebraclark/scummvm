@@ -46,7 +46,7 @@ jobs:
         shell: msys2 {0}
         run: |
           cd scummvm-src
-          ./configure --host=x86_64-w64-mingw32 --enable-freetype2 --disable-bink --disable-openssl --disable-libcurl --disable-theora --disable-vorbis --disable-flac
+          ./configure --host=x86_64-w64-mingw32 --enable-freetype2 2>&1 | tail -50
 
       - name: Build
         shell: msys2 {0}
