@@ -1,9 +1,5 @@
 /* ScummVM - Graphic Adventure Engine
  *
- * ScummVM is the legal property of its developers, whose names
- * are too numerous to list here. Please refer to the COPYRIGHT
- * file distributed with this source distribution.
- *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation, either version 3 of the License, or
@@ -24,6 +20,8 @@
 
 #include "lastexpress/shared.h"
 #include "lastexpress/sound/slot.h"
+
+namespace Graphics { class Font; }
 
 namespace LastExpress {
 
@@ -90,6 +88,11 @@ private:
 	int32 _upperLineLength = 0;
 	int32 _lowerLineLength = 0;
 	FontData *_font = nullptr;
+
+	// === M2 patch v2: Chinese TTF subtitle rendering ===
+	Graphics::Font *_ttfFont = nullptr;
+	void loadTtfFont();
+	// === end M2 patch v2 ===
 };
 
 } // End of namespace LastExpress
