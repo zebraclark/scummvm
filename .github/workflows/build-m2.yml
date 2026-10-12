@@ -20,16 +20,63 @@ jobs:
           ref: master
           path: scummvm-src
 
-      - name: Apply M2 patch
+      - name: Apply M2 patch headers
         shell: bash
         run: |
           cd scummvm-src
-          curl -fsSL https://raw.githubusercontent.com/zebraclark/scummvm/m2-cn-patch/.github/workflows/build-m2.yml -o /tmp/check.yml || true
-          mkdir -p engines/lastexpress/sound
           curl -fsSL https://raw.githubusercontent.com/zebraclark/scummvm/m2-cn-patch/engines/lastexpress/sound/subtitle.h -o engines/lastexpress/sound/subtitle.h
+
+      - name: Apply M2 patch impl
+        shell: bash
+        run: |
+          cd scummvm-src
           curl -fsSL https://raw.githubusercontent.com/zebraclark/scummvm/m2-cn-patch/engines/lastexpress/sound/subtitle.cpp -o engines/lastexpress/sound/subtitle.cpp
           echo "=== files applied ==="
-          ls -la engines/lastexpress/sound/subtitle.*
+          wc -l engines/lastexpress/sound/subtitle.*
+
+      - name: Fix loadTtfFont API
+        shell: bash
+        run: |
+          cd scummvm-src
+          python3 -c "
+          import re
+          with open('engines/lastexpress/sound/subtitle.cpp', 'r') as f:
+              content = f.read()
+
+          new_func = '''void SubtitleManager::loadTtfFont() {
+\tif (_ttfFont) {
+\t\tdelete _ttfFont;
+\t\t_ttfFont = nullptr;
+\t}
+
+#ifdef USE_FREETYPE2
+\tCommon::File fontFile;
+\tif (fontFile.open(Common::Path(\"cnfont.ttf\"))) {
+\t\t_ttfFont = Graphics::loadTTFFont(&fontFile, DisposeAfterUse::NO, 18,
+\t\t                                  Graphics::kTTFSizeModeCharacter,
+\t\t                                  0, 0, Graphics::kTTFRenderModeLight);
+\t\tif (_ttfFont) {
+\t\t\tdebug(1, \"LastExpress CN: TTF font loaded (cnfont.ttf)\");
+\t\t} else {
+\t\t\twarning(\"LastExpress CN: loadTTFFont returned null for cnfont.ttf\");
+\t\t}
+\t} else {
+\t\twarning(\"LastExpress CN: cnfont.ttf not found in search path; falling back to FONT.DAT\");
+\t}
+#else
+\twarning(\"LastExpress CN: USE_FREETYPE2 disabled; TTF subtitles unavailable\");
+#endif
+}'''
+
+          pattern = r'void SubtitleManager::loadTtfFont\\(\\).*?^\\}'
+          new_content = re.sub(pattern, new_func, content, count=1, flags=re.DOTALL | re.MULTILINE)
+          if new_content == content:
+              print('WARN: pattern not found, no replacement made')
+          else:
+              with open('engines/lastexpress/sound/subtitle.cpp', 'w') as f:
+                  f.write(new_content)
+              print('OK: loadTtfFont replaced')
+          "
 
       - name: Setup MSYS2
         uses: msys2/setup-msys2@v2
@@ -46,13 +93,13 @@ jobs:
         shell: msys2 {0}
         run: |
           cd scummvm-src
-          ./configure --host=x86_64-w64-mingw32 --enable-freetype2 2>&1 | tail -50
+          ./configure --host=x86_64-w64-mingw32 --enable-freetype2 2>&1 | tail -30
 
       - name: Build
         shell: msys2 {0}
         run: |
           cd scummvm-src
-          make -j2
+          make -j2 2>&1 | tail -50
 
       - name: Package
         shell: msys2 {0}
